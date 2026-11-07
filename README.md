@@ -3,10 +3,10 @@
 ## 当前环境
 
 - 设备：GL.iNet GL-MT3000，已通过 SSH 核实内核为 `5.4.211`，软件包架构为 `aarch64_cortex-a53`。
-- 系统：OpenWrt `21.02-SNAPSHOT`，修订 `r15812+899-46b6ee7ffc`，目标 `mediatek/mt7981`。界面标识为 `Openwrt like iStoreOS Style by wukongdaily`；这是 GL.iNet 系统上的风格化，不是官方 iStoreOS。
+- 系统：GL.iNet `4.6.2`，基于 OpenWrt `21.02-SNAPSHOT`，修订 `r15812+899-46b6ee7ffc`，目标 `mediatek/mt7981`。界面标识为 `Openwrt like iStoreOS Style by wukongdaily`；这是 GL.iNet 系统上的风格化，不是官方 iStoreOS。
 - 拓扑：光猫 → 上级路由器 LAN → GL-MT3000 WAN → 日常使用的设备。这是二级路由，不是旁路由；上级路由器不承担代理功能。
 - 当前管理地址：`192.168.50.10`，已由用户确认，且本机默认网关也是此地址。旧记录中的 `192.168.8.1` 不再适用。
-- 已实测可访问：[原厂管理页](http://192.168.50.10/)、[LuCI](http://192.168.50.10/cgi-bin/luci/)。旧记录中的 `8080` 端口目前不可达，不要照搬。
+- 日常入口是 [LuCI 首页](http://192.168.50.10/cgi-bin/luci/admin/quickstart/)。[原厂管理页](http://192.168.50.10/)也可访问，但这套 CN 固件未显示原厂 VPN 菜单，`#/wgclient` 页面实测返回 `Not Found`，切换英文也未解决；不依赖它管理隧道。旧记录中的 `8080` 端口目前不可达，不要照搬。
 - 上游 WAN：DHCP，当前为 `192.168.1.13`，网关 `192.168.1.1`；租约地址可能变化。LAN 为 `192.168.50.0/24`。
 
 ## SSH 登录
@@ -45,9 +45,30 @@ uci -q get network.wan.proto
 ip -4 route show
 ```
 
-当前目标是用自有 VPS 建立隧道，不依赖订阅或 OpenClash。现机已安装 `kmod-wireguard`、`wireguard-tools`、GL.iNet 的 WireGuard 客户端和 VPN 策略组件，且有 netifd 的 WireGuard 协议脚本；尚无 WireGuard 接口。先验证实际 UDP 通路，再接入一台测试设备，后续由软路由的策略路由和 DNS 决定分流。
+现机已安装 `kmod-wireguard`、`wireguard-tools` 和 netifd 的 WireGuard 协议脚本。LuCI 的 WireGuard 协议编辑组件未安装；「网络 → 接口」页还会要求迁移旧 `ifname` 配置并重启网络，本次未执行，不能为查看状态就直接点「继续」。当前通过 SSH/UCI 维护，不把缺少网页编辑器误判为内核不支持，也不强装不匹配的软件包。
 
-注意：旧 OpenClash 目前仍启用并有核心进程，DNS 转发到 `127.0.0.1#7874`，同时有透明代理规则；GL.iNet 也已有策略路由规则。不能直接清空防火墙、覆盖 DNS 或叠加默认路由。切换方案时要协调这些现有规则，并保留回退路径。
+## VPS 隧道与切换边界
+
+连接层已部署，**日常设备的流量尚未切换**。不依赖订阅；后续策略路由直接使用标准 OpenWrt 接口，不另起一套原厂 VPN 管理逻辑。
+
+- VPS：`104.36.65.170:51820/UDP`，AlmaLinux `9.7`；服务为 `wg-quick@wg0`，实际配置及私钥在 VPS 的 `/etc/wireguard/wg0.conf`（权限 `600`）。IPv4 转发通过 `/etc/sysctl.d/70-glmt3000-wireguard.conf` 启用；NAT/转发规则由隧道服务启停管理，只覆盖客户端隧道地址。
+- 软路由：标准 netifd 接口 `wgvps`，实际配置及私钥在 `/etc/config/network`；VPS 隧道地址为 `10.77.0.1`，路由器为 `10.77.0.2`。隧道已配置自动启动，但未通过整机重启验证。
+- 路由安全边界：`route_allowed_ips=0`、`defaultroute=0`、`peerdns=0`，只添加到 `10.77.0.1/32` 的直连路由。Peer 的 `AllowedIPs=0.0.0.0/0` 是加密流量的允许范围，不等于已经给全家添加默认路由。
+- 验证证据：握手成功，接口停启后能重连；短时连续 ping 与接近 MTU 的大包均返回。通过仅限测试源地址和目标的临时路由/代理例外，外部 HTTPS 服务观察到出口为 `104.36.65.170`。这些临时例外和测试接口已全部删除；该结果不代表长期稳定性、吞吐量或 LAN 设备切换已验证。
+
+**切换前必须解决旧代理的所有权冲突。** OpenClash 仍保持原有启用状态，DNS 转发到 `127.0.0.1#7874`，其 NAT OUTPUT 链会截获本机 TCP 请求；实测会使指定了测试源地址的 HTTPS 请求仍走旧出口。临时绕开截获仅用于诊断，不是完成修复。正式切换时需协调停用旧代理、DNS 和策略路由，确保选定流量只由新方案控制；不能只叠加一条路由，也不能直接清空防火墙。
+
+检查与停止连接层（不会替你切换日常设备）：
+
+```sh
+ssh glmt3000 'wg show wgvps; ping -I wgvps -c 5 10.77.0.1'
+ssh glmt3000 'ifdown wgvps'
+# 重新启动：ssh glmt3000 'ifup wgvps'
+ssh bandwagon 'systemctl status wg-quick@wg0 --no-pager'
+# 停止服务端：ssh bandwagon 'systemctl disable --now wg-quick@wg0'
+```
+
+配置前备份保存在两台设备各自的 `/root/.local/glmt3000-vps/baseline.*`，含敏感信息，不能上传。私有客户端导入文件另存于软路由的 `/root/.local/glmt3000-vps/profiles/` 和本仓库被忽略的 `.local/`，不得强制提交；标准 UCI 接口才是当前客户端配置的权威来源，不再同步维护导入文件。VPS 的包安装事务记录在 `/root/.local/glmt3000-vps/package-transaction.txt`：安装 `wireguard-tools` 时还安装了 `systemd-resolved` 并更新 systemd 相关依赖；SSH、NetworkManager 和原有 DNS 配置复查正常，未重启整机。
 
 改动前在仓库外或被忽略的本地目录保存配置备份，保留管理入口和可执行的回退方式；一次只改一个环节，不先切换全家网络。不为移除旧代理而恢复出厂，也不在未核实依赖与软件源兼容性的情况下升级固件或强装软件包。
 

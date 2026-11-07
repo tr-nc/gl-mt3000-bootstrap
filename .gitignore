@@ -1,1 +1,5 @@
 **/.DS_Store
+
+# Local maintenance data and configuration backups may contain secrets.
+/.local/
+/backups/

@@ -47,6 +47,25 @@ ip -4 route show
 
 现机已安装 `kmod-wireguard`、`wireguard-tools` 和 netifd 的 WireGuard 协议脚本。LuCI 的 WireGuard 协议编辑组件未安装；「网络 → 接口」页还会要求迁移旧 `ifname` 配置并重启网络，本次未执行，不能为查看状态就直接点「继续」。当前通过 SSH/UCI 维护，不把缺少网页编辑器误判为内核不支持，也不强装不匹配的软件包。
 
+## 手机浏览器的小范围体验
+
+2026-11-08 已安装独立的路由器 Xray 客户端，提供 **LAN 显式 HTTP 代理 `192.168.50.10:18080`**。Android 手机连这台路由器的 Wi-Fi 后，在该 Wi-Fi 的高级设置选择手动代理；排除地址可设 `localhost,127.*,192.168.*` 以保留内网访问。浏览器访问 `https://www.cloudflare.com/cdn-cgi/trace` 应看到 `ip=104.36.65.170`。试完恢复手机原来的 Wi-Fi 代理设置（通常为无）。不需要在手机安装 App、证书或 root；部分 App 不遵循 Wi-Fi HTTP 代理，不代表整机流量接管。
+
+- **Mac 仅作 SSH 控制终端**，不安装/运行代理客户端，不设置 Mac 代理。此前临时 macOS 测试二进制已删除。
+- 服务为 `/etc/init.d/cg-vps-proxy`；脚本与当前操作入口在本机 `~/code/config-guides/vps/proxy/openwrt/README.md`。私有配置为 `/etc/cg-vps-proxy/client.json`，不提交。
+- 进程运行于既有 `nobody`（UID 65534）；旧 OpenClash 恰好排除此 UID 以防代理套娃。同配置 root 对照握手失败、此 UID 对照成功，不新增出站绕过规则。规则最初引入时间未查明。
+- HTTP 仅监听 LAN 地址，SOCKS 仅监听 `127.0.0.1:10808`；自有 INPUT 链只放行 LAN 接口/网段和 loopback，`/etc/firewall.user` 只注册这段保护的刷新。网络/DHCP/UCI 防火墙/OpenClash 配置未变，旧 OpenClash 进程没有重启。
+- 不会自动把全家切到新节点。重复安装、服务重启、保护规则幂等、非 LAN 源拒绝、外部 HTTPS 和并发已测；没有操作真实手机，也没有整机重启。路由器路径 3×5 MB 下载中位数约 4.99 Mbps，不是手机速率保证。
+
+停用时先恢复手机原代理设置，之后可执行：
+
+```sh
+ssh glmt3000 '/etc/init.d/cg-vps-proxy disable; /etc/init.d/cg-vps-proxy stop'
+# 恢复：ssh glmt3000 '/etc/init.d/cg-vps-proxy enable; /etc/init.d/cg-vps-proxy start'
+```
+
+本轮安装备份在路由器 `/root/.local/cg-vps-proxy/backups/install.*`，均属私有；保留不删除。
+
 ## VPS 隧道与切换边界
 
 连接层已部署，**日常设备的流量尚未切换**。不依赖订阅；后续策略路由直接使用标准 OpenWrt 接口，不另起一套原厂 VPN 管理逻辑。
